@@ -1,0 +1,22 @@
+services:
+  pgdb:
+    container_name: pgdb
+    image: postgres:17.2
+    environment:
+      POSTGRES_DB: dblab
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgresql_bin:/usr/lib/postgresql
+      - postgresql_data:/var/lib/postgresql/data
+    networks:
+      - pgdb
+networks:
+  pgdb:
+    driver: bridge
+
+volumes:
+  postgresql_data:
+    driver: local
+  postgresql_bin:
+    driver: local
