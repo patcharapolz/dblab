@@ -275,7 +275,7 @@ FROM
     JOIN quests q ON ip.quest_id = q.quest_id
     JOIN items i ON ip.item_id = i.item_id
 WHERE
-    i.item_name = 'Shield';
+    i.item_name = 'Magic Sword';
 
 -- How man items purchases by players
 SELECT
@@ -328,11 +328,11 @@ INSERT INTO players (
 ) 
 VALUES (
     (SELECT COALESCE(MAX(player_id), 0) + 1 FROM players),  -- auto-increment player_id
-    'James', 
-    'james@email.com', 
-    'Beginner', 
-    'Bronze', 
-    'Japan', 
+    'Patcharapol', 
+    'Patcharapolz@gmail.com', 
+    'Expert', 
+    'Immortal', 
+    'Thailand', 
     0.00
 );
 INSERT INTO events (event_name)
