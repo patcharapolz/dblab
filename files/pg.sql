@@ -9,16 +9,31 @@
 
 -- Solution: คำนวณกำไรจากการขายผลิตภัณฑ์แต่ละตัวโดยการหักลบ unit_price กับราคาต้นทุนสมมติ (หรือข้อมูลจาก suppliers) และคูณด้วยจำนวนที่ขาย สรุปกำไรสะสมทั้งหมดของแต่ละผลิตภัณฑ์ จัดเรียงผลิตภัณฑ์จากกำไรสูงสุดไปต่ำสุด
 
-WITH product_profit AS (
-    SELECT p.product_name, 
-           SUM(od.quantity * (od.unit_price - p.supplier_price)) AS total_profit
-    FROM products p
-    JOIN order_details od ON p.product_id = od.product_id
-    GROUP BY p.product_name
-)
-SELECT product_name, total_profit
-FROM product_profit
-ORDER BY total_profit DESC;
+SELECT 
+    p.product_name, 
+    SUM(od.quantity * (od.unit_price * (1 - od.discount))) AS total_revenue,  -- รายได้รวมหลังหักส่วนลด
+    SUM(od.quantity * p.unit_price) AS total_cost,  -- ต้นทุนสะสม
+    SUM(od.quantity * (od.unit_price * (1 - od.discount)) - od.quantity * p.unit_price) AS total_profit,  -- กำไรสุทธิ
+    CASE 
+        WHEN SUM(od.quantity * (od.unit_price * (1 - od.discount))) = 0 THEN 0  -- ป้องกันการหารด้วย 0
+        ELSE 
+            (SUM(od.quantity * (od.unit_price * (1 - od.discount)) - od.quantity * p.unit_price) * 100.0) / 
+            SUM(od.quantity * (od.unit_price * (1 - od.discount)))  -- คำนวณ % กำไร
+    END AS profit_percentage  -- เปอร์เซ็นต์กำไร
+FROM 
+    order_details od
+JOIN 
+    products p ON od.product_id = p.product_id
+JOIN 
+    orders o ON od.order_id = o.order_id
+GROUP BY 
+    p.product_name
+ORDER BY 
+    total_profit DESC;
+
+
+
+
 คำอธิบาย:
 
 
@@ -36,26 +51,40 @@ ORDER BY total_profit DESC;
 -- Solution:
 
 WITH monthly_sales AS (
-    SELECT p.product_name, 
-           EXTRACT(MONTH FROM o.order_date) AS sale_month,
-           SUM(od.quantity * od.unit_price) AS total_sales
+    SELECT 
+        od.product_id,
+        EXTRACT(YEAR FROM o.order_date) AS year,
+        EXTRACT(MONTH FROM o.order_date) AS month,
+        SUM(od.quantity * od.unit_price) AS total_sales
     FROM order_details od
-    JOIN products p ON od.product_id = p.product_id
     JOIN orders o ON od.order_id = o.order_id
-    GROUP BY p.product_name, EXTRACT(MONTH FROM o.order_date)
+    GROUP BY od.product_id, year, month
 ),
 sales_growth AS (
-    SELECT sale_month, 
-           product_name, 
-           total_sales,
-           LAG(total_sales) OVER (PARTITION BY product_name ORDER BY sale_month) AS prev_month_sales
-    FROM monthly_sales
+    SELECT 
+        ms.product_id,
+        ms.year,
+        ms.month,
+        ms.total_sales,
+        LAG(ms.total_sales) OVER (PARTITION BY ms.product_id ORDER BY ms.year, ms.month) AS previous_month_sales,
+        ((ms.total_sales - LAG(ms.total_sales) OVER (PARTITION BY ms.product_id ORDER BY ms.year, ms.month)) / 
+        LAG(ms.total_sales) OVER (PARTITION BY ms.product_id ORDER BY ms.year, ms.month)) * 100 AS growth_percentage
+    FROM monthly_sales ms
 )
-SELECT sale_month, product_name, total_sales, 
-       (total_sales - prev_month_sales) / prev_month_sales * 100 AS growth_percentage
-FROM sales_growth
-WHERE prev_month_sales IS NOT NULL
-ORDER BY growth_percentage DESC;
+SELECT 
+    sg.product_id,
+    p.product_name,
+    sg.year,
+    sg.month,
+    sg.growth_percentage,
+    sg.total_sales
+FROM sales_growth sg
+JOIN products p ON sg.product_id = p.product_id  -- JOIN products table to get product name
+WHERE sg.previous_month_sales IS NOT NULL
+ORDER BY sg.growth_percentage DESC
+LIMIT 20;
+
+
 
 
 -- 3. การวิเคราะห์ความสัมพันธ์ระหว่างการสั่งซื้อและจำนวนสินค้า
@@ -71,11 +100,16 @@ ORDER BY growth_percentage DESC;
 -- ช่วยให้ทราบว่าในคำสั่งซื้อที่มีจำนวนสินค้าสูง จะส่งผลต่อยอดขายอย่างไร
 -- Solution:
 
-SELECT SUM(od.quantity) AS total_quantity, 
-       SUM(od.quantity * od.unit_price) AS total_sales_value
+SELECT 
+    od.order_id,
+    SUM(od.quantity * od.unit_price * (1 - od.discount)) AS order_value,  -- คำนวณยอดขายที่มีการลดราคา
+    SUM(od.quantity) AS total_quantity
 FROM order_details od
 GROUP BY od.order_id
-HAVING SUM(od.quantity) > 10;
+HAVING SUM(od.quantity) > 10  -- คำนวณเฉพาะคำสั่งซื้อที่มีจำนวนสินค้ามากกว่า 10 ชิ้น
+ORDER BY total_quantity DESC;
+
+
 
 -- 4. วิเคราะห์ลูกค้าที่มีการซื้อซ้ำบ่อยที่สุด
 -- คำถาม:
@@ -113,6 +147,47 @@ FROM frequent_customers fc
 JOIN top_products tp ON fc.customer_id = tp.customer_id
 ORDER BY tp.product_count DESC;
 
+WITH customer_orders AS (
+    SELECT 
+        o.customer_id,
+        COUNT(o.order_id) AS total_orders
+    FROM orders o
+    GROUP BY o.customer_id
+    HAVING COUNT(o.order_id) > 3  -- คัดกรองลูกค้าที่มีคำสั่งซื้อมากกว่า 3 ครั้ง
+),
+customer_top_products AS (
+    SELECT 
+        o.customer_id,
+        od.product_id,
+        SUM(od.quantity) AS total_quantity
+    FROM orders o
+    JOIN order_details od ON o.order_id = od.order_id
+    WHERE o.customer_id IN (SELECT customer_id FROM customer_orders)
+    GROUP BY o.customer_id, od.product_id
+),
+top_customers AS (
+    SELECT 
+        co.customer_id,
+        co.total_orders,
+        SUM(od.quantity * od.unit_price * (1 - od.discount)) AS total_revenue  -- คำนวณรายได้ของลูกค้า
+    FROM customer_orders co
+    JOIN orders o ON co.customer_id = o.customer_id
+    JOIN order_details od ON o.order_id = od.order_id
+    GROUP BY co.customer_id, co.total_orders
+)
+SELECT 
+    tc.customer_id,
+    tc.total_orders,
+    tc.total_revenue,
+    p.product_name,
+    ctp.total_quantity
+FROM top_customers tc
+JOIN customer_top_products ctp ON tc.customer_id = ctp.customer_id
+JOIN products p ON ctp.product_id = p.product_id
+ORDER BY tc.total_orders DESC, ctp.total_quantity DESC
+LIMIT 3;
+
+
 
 -- 5. การวิเคราะห์ยอดขายตามภูมิภาค
 -- คำถาม:
@@ -135,6 +210,45 @@ JOIN order_details od ON o.order_id = od.order_id
 GROUP BY c.country
 ORDER BY total_sales DESC;
 
+
+
+WITH region_sales AS (
+    SELECT 
+        c.country,
+        SUM(od.quantity * od.unit_price * (1 - od.discount)) AS total_sales
+    FROM orders o
+    JOIN order_details od ON o.order_id = od.order_id
+    JOIN customers c ON o.customer_id = c.customer_id
+    GROUP BY c.country
+),
+lowest_region_sales AS (
+    SELECT country, total_sales
+    FROM region_sales
+    ORDER BY total_sales ASC
+    LIMIT 1  -- เลือกภูมิภาคที่มียอดขายต่ำสุด
+),
+top_product_in_lowest_region AS (
+    SELECT 
+        od.product_id,
+        p.product_name,
+        SUM(od.quantity) AS total_quantity,
+        SUM(od.quantity * od.unit_price * (1 - od.discount)) AS product_sales
+    FROM order_details od
+    JOIN orders o ON od.order_id = o.order_id
+    JOIN customers c ON o.customer_id = c.customer_id
+    JOIN products p ON od.product_id = p.product_id
+    WHERE c.country = (SELECT country FROM lowest_region_sales)  -- ใช้ภูมิภาคที่มียอดขายต่ำสุด
+    GROUP BY od.product_id, p.product_name
+    ORDER BY product_sales DESC
+    LIMIT 1  -- เลือกสินค้าที่ขายดีที่สุดในภูมิภาคนี้
+)
+SELECT 
+    lr.country AS lowest_sales_region,
+    tp.product_name,
+    tp.product_sales,
+    tp.total_quantity
+FROM lowest_region_sales lr
+JOIN top_product_in_lowest_region tp ON lr.country = (SELECT country FROM lowest_region_sales);
 
 -- 8. การวิเคราะห์ประสิทธิภาพการทำงานของพนักงานจากคำสั่งซื้อที่ได้รับมอบหมาย
 -- คำถาม:
@@ -165,7 +279,48 @@ SELECT e.first_name || ' ' || e.last_name AS employee_name,
        (eo.completed_orders * 100.0 / eo.total_orders) AS completion_rate
 FROM employees e
 JOIN employee_orders eo ON e.employee_id = eo.employee_id
-ORDER BY eo.order_month, completion_rate DESC;
+ORDER BY completion_rate DESC;
+
+
+
+WITH employee_orders AS (
+    SELECT 
+        o.employee_id,
+        COUNT(o.order_id) AS total_orders,
+        COUNT(CASE WHEN o.shipped_date IS NOT NULL THEN 1 END) AS shipped_orders
+    FROM orders o
+    GROUP BY o.employee_id
+),
+employee_performance AS (
+    SELECT 
+        eo.employee_id,
+        eo.total_orders,
+        eo.shipped_orders,
+        (eo.shipped_orders::FLOAT / eo.total_orders) * 100 AS completion_rate
+    FROM employee_orders eo
+),
+lowest_performance AS (
+    SELECT 
+        e.employee_id,
+        e.completion_rate,
+        eo.total_orders,
+        eo.shipped_orders
+    FROM employee_performance e
+    JOIN employee_orders eo ON e.employee_id = eo.employee_id
+    ORDER BY e.completion_rate ASC
+    LIMIT 1
+)
+-- คำนวณยอดขายจากคำสั่งซื้อที่จัดส่งแล้ว พร้อมแสดงชื่อพนักงาน
+SELECT 
+    lp.employee_id,
+    emp.first_name || ' ' || emp.last_name AS employee_name,  -- การรวมชื่อและนามสกุลของพนักงาน
+    SUM(od.quantity * od.unit_price * (1 - od.discount)) AS total_sales
+FROM lowest_performance lp
+JOIN orders o ON lp.employee_id = o.employee_id
+JOIN order_details od ON o.order_id = od.order_id
+JOIN employees emp ON o.employee_id = emp.employee_id  -- เชื่อมโยงกับตาราง employees
+WHERE o.shipped_date IS NOT NULL
+GROUP BY lp.employee_id, emp.first_name, emp.last_name;
 
 
 -- 9. การวิเคราะห์ผลกระทบของพนักงานที่รับผิดชอบการขายในแต่ละภูมิภาค
